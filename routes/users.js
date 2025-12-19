@@ -1,113 +1,215 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { verifyToken, verifyAdmin } = require('../middleware/auth');
+const { verifyToken, verifyAdmin } = require("../middleware/auth");
 
-// Register/Create User
-router.post('/register', async (req, res) => {
+// Register or update user (called after Firebase authentication)
+router.post("/register", verifyToken, async (req, res) => {
   try {
+    const db = req.app.locals.db;
     const { name, email, photoURL } = req.body;
-    const db = req.app.locals.db;
-    
-    const existingUser = await db.collection('users').findOne({ email });
+
+    // Check if user already exists
+    const existingUser = await db.collection("users").findOne({ email });
+
     if (existingUser) {
-      return res.status(200).json({ message: 'User already exists', user: existingUser });
+      // Update existing user info (in case they changed their profile)
+      await db.collection("users").updateOne(
+        { email },
+        {
+          $set: {
+            name,
+            photoURL,
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      return res.json({
+        success: true,
+        message: "User profile updated",
+        isNewUser: false,
+        user: { ...existingUser, name, photoURL },
+      });
     }
-    
+
+    // Create new user with default role "member"
     const newUser = {
-      name,
       email,
-      photoURL: photoURL || '',
-      role: 'member',
-      createdAt: new Date()
+      name,
+      photoURL,
+      role: "member",
+      createdAt: new Date(),
     };
-    
-    await db.collection('users').insertOne(newUser);
-    res.status(201).json({ message: 'User created successfully', user: newUser });
+
+    await db.collection("users").insertOne(newUser);
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      isNewUser: true,
+      user: newUser,
+    });
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ message: 'Error creating user', error: error.message });
+    console.error("Error registering user:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error registering user",
+      error: error.message,
+    });
   }
 });
 
-// Get User Profile
-router.get('/profile', verifyToken, async (req, res) => {
+// Get current user profile
+router.get("/profile", verifyToken, async (req, res) => {
   try {
-    const email = req.user.email;
+    const db = req.app.locals.db;
+    const userEmail = req.user.email;
+    const user = await db.collection("users").findOne({ email: userEmail });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error("Error fetching profile:", error);
+    res.status(500).json({ message: "Error fetching profile", error: error.message });
+  }
+});
+
+// Update user profile
+router.patch("/profile", verifyToken, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const userEmail = req.user.email;
+    const { name, photoURL } = req.body;
+
+    const result = await db.collection("users").updateOne(
+      { email: userEmail },
+      {
+        $set: {
+          name,
+          photoURL,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ message: "Profile updated successfully" });
+  } catch (error) {
+    console.error("Error updating profile:", error);
+    res.status(500).json({ message: "Error updating profile", error: error.message });
+  }
+});
+
+// Get all users (Admin only)
+router.get("/", verifyAdmin, async (req, res) => {
+  try {
+    console.log("📋 GET /api/users - Fetching all users");
+    console.log("User making request:", req.user?.email);
+    console.log("User role:", req.userRole);
+    
     const db = req.app.locals.db;
     
-    const user = await db.collection('users').findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    if (!db) {
+      console.error("❌ Database connection not available");
+      return res.status(500).json({ message: "Database connection error" });
     }
     
-    res.status(200).json(user);
+    console.log("✅ Database connection OK");
+    
+    const users = await db
+      .collection("users")
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    console.log(`✅ Found ${users.length} users`);
+    res.json(users);
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching user profile', error: error.message });
+    console.error("❌ Error fetching users:", error);
+    console.error("Error stack:", error.stack);
+    res.status(500).json({ 
+      message: "Error fetching users", 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
-// Get All Users (Admin only)
-router.get('/', verifyToken, verifyAdmin, async (req, res) => {
+// Update user role (Admin only)
+router.patch("/role/:email", verifyAdmin, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    const users = await db.collection('users').find({}).toArray();
-    res.status(200).json(users);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching users', error: error.message });
-  }
-});
-
-// Update User Role (Admin only)
-router.patch('/role/:email', verifyToken, verifyAdmin, async (req, res) => {
-  try {
     const { email } = req.params;
     const { role } = req.body;
-    const db = req.app.locals.db;
     const adminEmail = req.user.email;
-    
+
+    console.log(`📝 Updating role for ${email} to ${role}`);
+
+    // Validate role
+    if (!["member", "clubManager", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
+    // Prevent admin from changing their own role
     if (email === adminEmail) {
-      return res.status(403).json({ message: 'Cannot change your own role' });
+      return res.status(403).json({ message: "Cannot change your own role" });
     }
-    
-    if (!['admin', 'clubManager', 'member'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role' });
-    }
-    
-    const result = await db.collection('users').updateOne(
+
+    const result = await db.collection("users").updateOne(
       { email },
-      { $set: { role, updatedAt: new Date() } }
+      {
+        $set: {
+          role,
+          updatedAt: new Date(),
+        },
+      }
     );
-    
+
     if (result.matchedCount === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
-    
-    res.status(200).json({ message: 'User role updated successfully' });
+
+    console.log(`✅ Role updated successfully for ${email}`);
+    res.json({ 
+      success: true,
+      message: "User role updated successfully",
+      email,
+      newRole: role
+    });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating user role', error: error.message });
+    console.error("❌ Error updating user role:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error updating user role", 
+      error: error.message 
+    });
   }
 });
 
-// Update User Profile
-router.patch('/profile', verifyToken, async (req, res) => {
+// Debug route - Check current user's role
+router.get("/debug/me", verifyToken, async (req, res) => {
   try {
-    const email = req.user.email;
-    const { name, photoURL } = req.body;
     const db = req.app.locals.db;
+    const user = await db.collection("users").findOne({ email: req.user.email });
     
-    const updateData = {};
-    if (name) updateData.name = name;
-    if (photoURL) updateData.photoURL = photoURL;
-    updateData.updatedAt = new Date();
-    
-    await db.collection('users').updateOne(
-      { email },
-      { $set: updateData }
-    );
-    
-    res.status(200).json({ message: 'Profile updated successfully' });
+    res.json({
+      firebaseUser: {
+        email: req.user.email,
+        uid: req.user.uid
+      },
+      databaseUser: user,
+      isAdmin: user?.role === "admin",
+      hasAdminAccess: user?.role === "admin"
+    });
   } catch (error) {
-    res.status(500).json({ message: 'Error updating profile', error: error.message });
+    console.error("Debug error:", error);
+    res.status(500).json({ message: "Error", error: error.message });
   }
 });
 
