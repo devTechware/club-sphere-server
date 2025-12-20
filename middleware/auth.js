@@ -1,7 +1,13 @@
 const admin = require("firebase-admin");
 
 // Initialize Firebase Admin (only once)
-if (!admin.apps.length) {
+let isInitialized = false;
+
+function initializeFirebase() {
+  if (isInitialized || admin.apps.length > 0) {
+    return;
+  }
+
   try {
     const serviceAccount = {
       projectId: process.env.FIREBASE_PROJECT_ID,
@@ -10,14 +16,16 @@ if (!admin.apps.length) {
     };
 
     console.log("🔥 Initializing Firebase Admin...");
-    console.log("Project ID:", serviceAccount.projectId);
-    console.log("Client Email:", serviceAccount.clientEmail);
-    console.log("Private Key:", serviceAccount.privateKey ? "✓ Present" : "✗ Missing");
+    
+    if (!serviceAccount.projectId || !serviceAccount.clientEmail || !serviceAccount.privateKey) {
+      throw new Error("Missing Firebase credentials in environment variables");
+    }
 
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
 
+    isInitialized = true;
     console.log("✅ Firebase Admin initialized successfully");
   } catch (error) {
     console.error("❌ Firebase Admin initialization failed:", error);
@@ -25,22 +33,21 @@ if (!admin.apps.length) {
   }
 }
 
+// Initialize on module load
+initializeFirebase();
+
 // Verify Firebase token
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      console.log("❌ No token provided or invalid format");
       return res.status(401).json({ message: "No token provided" });
     }
 
     const token = authHeader.split("Bearer ")[1];
     
-    console.log("🔐 Verifying token...");
     const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("✅ Token verified for:", decodedToken.email);
-    
     req.user = decodedToken;
     next();
   } catch (error) {
@@ -58,15 +65,11 @@ const verifyAdmin = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      console.log("❌ No token provided");
       return res.status(401).json({ message: "No token provided" });
     }
 
     const token = authHeader.split("Bearer ")[1];
-
-    console.log("🔐 Verifying admin token...");
     const decodedToken = await admin.auth().verifyIdToken(token);
-    console.log("✅ Token verified for:", decodedToken.email);
     req.user = decodedToken;
 
     // Check if user is admin in database
@@ -77,30 +80,23 @@ const verifyAdmin = async (req, res, next) => {
       return res.status(500).json({ message: "Database connection error" });
     }
 
-    console.log("🔍 Checking admin status in database...");
     const user = await db.collection("users").findOne({ email: decodedToken.email });
 
     if (!user) {
-      console.log("❌ User not found in database:", decodedToken.email);
       return res.status(404).json({ message: "User not found in database" });
     }
 
-    console.log("👤 User found:", user.email, "Role:", user.role);
-
     if (user.role !== "admin") {
-      console.log("❌ Access denied - user is not admin");
       return res.status(403).json({ 
         message: "Access denied. Admin role required.",
         currentRole: user.role 
       });
     }
 
-    console.log("✅ Admin access granted");
     req.userRole = user.role;
     next();
   } catch (error) {
     console.error("❌ Admin verification error:", error);
-    console.error("Error stack:", error.stack);
     return res.status(401).json({ 
       message: "Authorization failed",
       error: error.message 
