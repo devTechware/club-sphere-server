@@ -151,6 +151,7 @@ router.post("/", verifyToken, async (req, res) => {
       ...req.body,
       managerEmail: req.user.email,
       status: "pending",
+      images: req.body.images || [],
       createdAt: new Date(),
     };
 

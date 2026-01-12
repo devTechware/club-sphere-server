@@ -78,6 +78,7 @@ const eventRegistrationsRoute = require("./routes/eventRegistrations");
 const paymentsRoute = require("./routes/payments");
 const statsRoute = require("./routes/stats");
 const stripeRoute = require("./routes/stripe");
+const reviewsRoute = require("./routes/reviews");
 
 // Mount routes
 app.use("/api/users", usersRoute);
@@ -88,6 +89,7 @@ app.use("/api/event-registrations", eventRegistrationsRoute);
 app.use("/api/payments", paymentsRoute);
 app.use("/api/stats", statsRoute);
 app.use("/api/stripe", stripeRoute);
+app.use("/api/reviews", reviewsRoute);
 
 // Health check
 app.get("/", (req, res) => {
